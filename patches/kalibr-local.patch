@@ -1,0 +1,349 @@
+diff --git a/Schweizer-Messer/sm_python/python/sm/PlotCollection.py b/Schweizer-Messer/sm_python/python/sm/PlotCollection.py
+index 82d1060..9e4b5f1 100755
+--- a/Schweizer-Messer/sm_python/python/sm/PlotCollection.py
++++ b/Schweizer-Messer/sm_python/python/sm/PlotCollection.py
+@@ -1,13 +1,27 @@
+ # import wxversion
+ # wxversion.ensureMinimal('2.8')
+ 
+-import wx
+-import wx.aui
+ import matplotlib as mpl
+-from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as Canvas
+-from matplotlib.backends.backend_wx import NavigationToolbar2Wx as Toolbar
+ import collections
+ 
++wx = None
++Canvas = None
++Toolbar = None
++PanelBase = object
++
++def _load_wx_backend():
++    global wx, Canvas, Toolbar, PanelBase
++    if wx is not None:
++        return
++    import wx as _wx
++    import wx.aui
++    from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as _Canvas
++    from matplotlib.backends.backend_wx import NavigationToolbar2Wx as _Toolbar
++    wx = _wx
++    Canvas = _Canvas
++    Toolbar = _Toolbar
++    PanelBase = _wx.Panel
++
+ class PlotCollection:
+     def __init__(self, window_name="", window_size=(800,600)):
+         """
+@@ -54,6 +68,7 @@ class PlotCollection:
+         """
+         if len(list(self.figureList.keys())) == 0:
+             return
++        _load_wx_backend()
+         app = wx.App()
+         frame = wx.Frame(None,-1,self.frame_name, size=self.window_size)
+         plotter = self.PlotNotebook(frame)
+@@ -62,7 +77,7 @@ class PlotCollection:
+         frame.Show()
+         app.MainLoop()
+         
+-    class Plot(wx.Panel):
++    class Plot(PanelBase):
+         def __init__(self, parent, fig, id = -1, dpi = None, **kwargs):
+             wx.Panel.__init__(self, parent, id=id, **kwargs)
+             fig.set_figheight(2)
+@@ -76,7 +91,7 @@ class PlotCollection:
+             sizer.Add(self.toolbar, 0 , wx.LEFT | wx.EXPAND)
+             self.SetSizer(sizer)
+     
+-    class PlotNotebook(wx.Panel):
++    class PlotNotebook(PanelBase):
+         def __init__(self, parent, id = -1):
+             wx.Panel.__init__(self, parent, id=id)
+             self.nb = wx.aui.AuiNotebook(self)
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_calibrate_cameras b/aslam_offline_calibration/kalibr/python/kalibr_calibrate_cameras
+index dc6a909..29fe658 100755
+--- a/aslam_offline_calibration/kalibr/python/kalibr_calibrate_cameras
++++ b/aslam_offline_calibration/kalibr/python/kalibr_calibrate_cameras
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python
+ print("importing libraries")
+ import rosbag
++import cv2
+ import cv_bridge
+ 
+ import sm
+@@ -11,7 +12,6 @@ import aslam_cv_backend as acvb
+ import kalibr_common as kc
+ import kalibr_camera_calibration as kcc
+ 
+-import cv2
+ import os
+ import numpy as np
+ import multiprocessing
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_calibrate_imu_camera b/aslam_offline_calibration/kalibr/python/kalibr_calibrate_imu_camera
+index ca14c6a..fce0366 100755
+--- a/aslam_offline_calibration/kalibr/python/kalibr_calibrate_imu_camera
++++ b/aslam_offline_calibration/kalibr/python/kalibr_calibrate_imu_camera
+@@ -95,6 +95,14 @@ def parseArgs():
+     groupOpt.add_argument('--max-iter', type=int, default=30, dest='max_iter', help='Max. iterations (default: %(default)s)', required=False)
+     groupOpt.add_argument('--recover-covariance', action='store_true', dest='recover_cov', help='Recover the covariance of the design variables.', required=False)
+     groupOpt.add_argument('--timeoffset-padding', type=float, default=30.e-3, dest='timeoffset_padding', help='Maximum range in which the timeoffset may change during estimation [s] (default: %(default)s)', required=False)
++    groupOpt.add_argument('--pose-knots-per-second', type=int, default=100, dest='pose_knots_per_second', help='Pose spline knots per second (default: %(default)s)', required=False)
++    groupOpt.add_argument('--bias-knots-per-second', type=int, default=50, dest='bias_knots_per_second', help='IMU bias spline knots per second (default: %(default)s)', required=False)
++    groupOpt.add_argument('--timeoffset-search-window', type=float, default=0.0, dest='timeoffset_search_window', help='Limit the initial camera-IMU correlation to +/- this many seconds; 0 disables the limit (default: %(default)s)', required=False)
++    groupOpt.add_argument('--rolling-shutter-line-delay', type=float, default=0.0, dest='rolling_shutter_line_delay', help='Fixed line delay in seconds per published image row; only 0 is currently supported (default: %(default)s)', required=False)
++    groupOpt.add_argument('--reprojection-robust-df', type=float, default=0.0, dest='reprojection_robust_df', help='Blake-Zisserman degrees of freedom for reprojection residuals; 0 disables it (default: %(default)s)', required=False)
++    groupOpt.add_argument('--accel-huber-sigma', type=float, default=0.0, dest='accel_huber_sigma', help='Accelerometer Huber width in sigma; 0 disables it (default: %(default)s)', required=False)
++    groupOpt.add_argument('--gyro-huber-sigma', type=float, default=0.0, dest='gyro_huber_sigma', help='Gyroscope Huber width in sigma; 0 disables it (default: %(default)s)', required=False)
++    groupOpt.add_argument('--imu-use-bag-time', action='store_true', dest='imu_use_bag_time', help='Use rosbag receive timestamps instead of IMU message header timestamps.', required=False)
+ 
+     #Result options  
+     outputSettings = parser.add_argument_group('Output options')
+@@ -114,6 +122,13 @@ def parseArgs():
+         parsed = parser.parse_args()
+     except:
+         sys.exit(2)
++
++    if parsed.pose_knots_per_second <= 0 or parsed.bias_knots_per_second <= 0:
++        parser.error('Spline knot rates must be positive.')
++    if parsed.timeoffset_search_window < 0.0:
++        parser.error('--timeoffset-search-window must be non-negative.')
++    if parsed.rolling_shutter_line_delay != 0.0:
++        parser.error('Non-zero --rolling-shutter-line-delay is not supported by this camera model.')
+                  
+     if parsed.verbose:
+         parsed.showextraction = True             
+@@ -186,17 +201,18 @@ def main():
+     print("")
+     print("Building the problem")
+     iCal.buildProblem(splineOrder=6, 
+-                      poseKnotsPerSecond=100, 
+-                      biasKnotsPerSecond=50, 
++                      poseKnotsPerSecond=parsed.pose_knots_per_second,
++                      biasKnotsPerSecond=parsed.bias_knots_per_second,
+                       doPoseMotionError=False,
+                       doBiasMotionError=True,
+-                      blakeZisserCam=-1,
+-                      huberAccel=-1,
+-                      huberGyro=-1,
++                      blakeZisserCam=parsed.reprojection_robust_df,
++                      huberAccel=parsed.accel_huber_sigma,
++                      huberGyro=parsed.gyro_huber_sigma,
+                       noTimeCalibration=parsed.no_time,
+                       noChainExtrinsics=(not parsed.recompute_chain_extrinsics),
+                       maxIterations=parsed.max_iter,
+                       timeOffsetPadding=parsed.timeoffset_padding,
++                      timeOffsetSearchWindow=parsed.timeoffset_search_window,
+                       verbose = parsed.verbose)
+ 
+     print("")
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_calibrate_rs_cameras b/aslam_offline_calibration/kalibr/python/kalibr_calibrate_rs_cameras
+index 660f920..5478900 100755
+--- a/aslam_offline_calibration/kalibr/python/kalibr_calibrate_rs_cameras
++++ b/aslam_offline_calibration/kalibr/python/kalibr_calibrate_rs_cameras
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python
+ print("importing libraries")
+ import rosbag
++import cv2
+ import cv_bridge
+ 
+ import sm
+@@ -12,7 +13,6 @@ import kalibr_common as kc
+ import kalibr_camera_calibration as kcc
+ import kalibr_rs_camera_calibration as rscc
+ 
+-import cv2
+ import os
+ import numpy as np
+ import pylab as pl
+@@ -171,4 +171,3 @@ if __name__ == "__main__":
+     except Exception as e:
+         sm.logError("Exception: {0}".format(e))
+         sys.exit(-1)
+-
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_common/ImageDatasetReader.py b/aslam_offline_calibration/kalibr/python/kalibr_common/ImageDatasetReader.py
+index 776f7d8..584f72f 100644
+--- a/aslam_offline_calibration/kalibr/python/kalibr_common/ImageDatasetReader.py
++++ b/aslam_offline_calibration/kalibr/python/kalibr_common/ImageDatasetReader.py
+@@ -1,5 +1,5 @@
+-import cv_bridge
+ import cv2
++import cv_bridge
+ import rosbag
+ import os
+ import numpy as np
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_common/ImuDatasetReader.py b/aslam_offline_calibration/kalibr/python/kalibr_common/ImuDatasetReader.py
+index 9f00748..f47c555 100644
+--- a/aslam_offline_calibration/kalibr/python/kalibr_common/ImuDatasetReader.py
++++ b/aslam_offline_calibration/kalibr/python/kalibr_common/ImuDatasetReader.py
+@@ -24,10 +24,12 @@ class BagImuDatasetReaderIterator(object):
+         return self.dataset.getMessage(idx)
+ 
+ class BagImuDatasetReader(object):
+-    def __init__(self, bagfile, imutopic, bag_from_to=None, perform_synchronization=False):
++    def __init__(self, bagfile, imutopic, bag_from_to=None, perform_synchronization=False,
++                 use_bag_time=False):
+         self.bagfile = bagfile
+         self.topic = imutopic
+         self.perform_synchronization = perform_synchronization
++        self.use_bag_time = use_bag_time
+         self.bag = rosbag.Bag(bagfile)
+         self.uncompress = None
+         if imutopic is None:
+@@ -57,7 +59,10 @@ class BagImuDatasetReader(object):
+         timestamps=list()
+         for idx in self.indices:
+             topic, data, stamp = self.bag._read_message(self.index[idx].position)
+-            timestamp = data.header.stamp.secs*1e9 + data.header.stamp.nsecs
++            if self.use_bag_time:
++                timestamp = stamp.secs*1e9 + stamp.nsecs
++            else:
++                timestamp = data.header.stamp.secs*1e9 + data.header.stamp.nsecs
+             timestamps.append(timestamp)
+             if self.perform_synchronization:
+                 self.timestamp_corrector.correctTimestamp(data.header.stamp.to_sec(), \
+@@ -72,7 +77,10 @@ class BagImuDatasetReader(object):
+         timestamps=list()
+         for idx in self.indices:
+             topic, data, stamp = self.bag._read_message(self.index[idx].position)
+-            timestamp = data.header.stamp.secs + data.header.stamp.nsecs/1.0e9
++            if self.use_bag_time:
++                timestamp = stamp.to_sec()
++            else:
++                timestamp = data.header.stamp.secs + data.header.stamp.nsecs/1.0e9
+             timestamps.append(timestamp)
+ 
+         bagstart = min(timestamps)
+@@ -113,7 +121,9 @@ class BagImuDatasetReader(object):
+     
+     def getMessage(self,idx):
+         topic, data, stamp = self.bag._read_message(self.index[idx].position)
+-        if self.perform_synchronization:
++        if self.use_bag_time:
++            timestamp = acv.Time(stamp.secs, stamp.nsecs)
++        elif self.perform_synchronization:
+             timestamp = acv.Time(self.timestamp_corrector.getLocalTime(data.header.stamp.to_sec()))
+         else:
+             timestamp = acv.Time( data.header.stamp.secs, data.header.stamp.nsecs )
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_create_target_pdf b/aslam_offline_calibration/kalibr/python/kalibr_create_target_pdf
+index 27e31dc..2ae5bbd 100755
+--- a/aslam_offline_calibration/kalibr/python/kalibr_create_target_pdf
++++ b/aslam_offline_calibration/kalibr/python/kalibr_create_target_pdf
+@@ -119,17 +119,16 @@ def generateAprilBoard(canvas, n_cols, n_rows, tagSize, tagSpacing=0.25, tagFami
+              [color.rgb.red,
+               deco.earrow([deco.stroked([color.rgb.red, style.linejoin.round]),
+               deco.filled([color.rgb.red])], size=tagSize*0.10)])
+-    c.text(pos[0]+tagSize*0.3, pos[1], "x")
++    # Avoid a hard runtime dependency on TeX/PyX text rendering.
+     
+     c.stroke(path.line(pos[0], pos[1], pos[0], pos[1]+tagSize*0.3),
+              [color.rgb.green,
+               deco.earrow([deco.stroked([color.rgb.green, style.linejoin.round]),
+               deco.filled([color.rgb.green])], size=tagSize*0.10)])
+-    c.text(pos[0], pos[1]+tagSize*0.3, "y")
++    # Axis labels are optional; the colored arrows already indicate orientation.
+ 
+     #text
+     caption = "{0}x{1} tags, size={2}cm and spacing={3}cm".format(n_cols,n_rows,tagSize,tagSpacing*tagSize)
+-    c.text(pos[0]+0.6*tagSize, pos[0], caption)
+ 
+ 
+ def generateCheckerboard(canvas, n_cols, n_rows, size_cols, size_rows):
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccCalibrator.py b/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccCalibrator.py
+index d79a254..e972208 100644
+--- a/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccCalibrator.py
++++ b/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccCalibrator.py
+@@ -78,6 +78,7 @@ class IccCalibrator(object):
+                       gyroNoiseScale=1.0,
+                       accelNoiseScale=1.0,
+                       timeOffsetPadding=0.02,
++                      timeOffsetSearchWindow=0.0,
+                       verbose=False  ):
+ 
+         print("\tSpline order: %d" % (splineOrder))
+@@ -93,6 +94,7 @@ class IccCalibrator(object):
+         print("\tDo time calibration: %s" % (not noTimeCalibration))
+         print("\tMax iterations: %d" % (maxIterations))
+         print("\tTime offset padding: %f" % (timeOffsetPadding))
++        print("\tInitial time offset search window: %f" % (timeOffsetSearchWindow))
+ 
+ 
+         ############################################
+@@ -102,7 +104,7 @@ class IccCalibrator(object):
+         self.noTimeCalibration = noTimeCalibration
+         if not noTimeCalibration:
+             for cam in self.CameraChain.camList:
+-                cam.findTimeshiftCameraImuPrior(self.ImuList[0], verbose)
++                cam.findTimeshiftCameraImuPrior(self.ImuList[0], verbose, timeOffsetSearchWindow)
+         
+         #obtain orientation prior between main imu and camera chain (if no external input provided)
+         #and initial estimate for the direction of gravity
+diff --git a/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccSensors.py b/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccSensors.py
+index a7238ff..5eb6867 100644
+--- a/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccSensors.py
++++ b/aslam_offline_calibration/kalibr/python/kalibr_imu_camera_calibration/IccSensors.py
+@@ -27,12 +27,13 @@ def initCameraBagDataset(bagfile, topic, from_to, freq, perform_synchronization)
+     print("\tNumber of images: {0}".format(len(reader.index)))
+     return reader
+ 
+-def initImuBagDataset(bagfile, topic, from_to=None, perform_synchronization=False):
++def initImuBagDataset(bagfile, topic, from_to=None, perform_synchronization=False, use_bag_time=False):
+     print("Initializing imu rosbag dataset reader:")
+     print("\tDataset:          {0}".format(bagfile))
+     print("\tTopic:            {0}".format(topic))
+     reader = kc.BagImuDatasetReader(bagfile, topic, bag_from_to=from_to, \
+-                                      perform_synchronization=perform_synchronization)
++                                      perform_synchronization=perform_synchronization, \
++                                      use_bag_time=use_bag_time)
+     print("\tNumber of messages: {0}".format(len(reader.index)))
+     return reader
+ 
+@@ -214,7 +215,7 @@ class IccCamera():
+     #          then computing the cross correlating between the "predicted" angular rates (camera)
+     #          and imu, the maximum corresponds to the timeshift...
+     #          in a next step we can use the time shift to estimate the rotation between camera and imu
+-    def findTimeshiftCameraImuPrior(self, imu, verbose=False):
++    def findTimeshiftCameraImuPrior(self, imu, verbose=False, searchWindow=0.0):
+         print("Estimating time shift camera to imu:")
+         
+         #fit a spline to the camera observations
+@@ -245,11 +246,18 @@ class IccCamera():
+         
+         #get the time shift
+         corr = np.correlate(omega_predicted_norm, omega_measured_norm, "full")
+-        discrete_shift = corr.argmax() - (np.size(omega_measured_norm) - 1)
+-        
+-        #get cont. time shift
+         times = [im.stamp.toSec() for im in imu.imuData]
+         dT = np.mean(np.diff( times ))
++        lags = np.arange(-(np.size(omega_measured_norm) - 1), np.size(omega_predicted_norm))
++        if searchWindow > 0.0:
++            valid = np.abs(lags * dT) <= searchWindow
++            if not np.any(valid):
++                raise RuntimeError("The time-offset search window is smaller than one IMU sample.")
++            discrete_shift = lags[valid][np.argmax(corr[valid])]
++        else:
++            discrete_shift = lags[np.argmax(corr)]
++
++        #get cont. time shift
+         shift = -discrete_shift*dT
+         
+         #Create plots
+@@ -591,7 +599,8 @@ class IccImu(object):
+ 
+         #load dataset
+         self.dataset = initImuBagDataset(parsed.bagfile[0], imuConfig.getRosTopic(), \
+-                                         parsed.bag_from_to, parsed.perform_synchronization)
++                                         parsed.bag_from_to, parsed.perform_synchronization, \
++                                         parsed.imu_use_bag_time)
+         
+         #statistics
+         self.accelUncertaintyDiscrete, self.accelRandomWalk, self.accelUncertainty = self.imuConfig.getAccelerometerStatistics()
+@@ -1169,4 +1178,4 @@ class IccScaledMisalignedSizeEffectImu(IccScaledMisalignedImu):
+             iProgress.sample()
+ 
+         print("\r  Added {0} of {1} accelerometer error terms (skipped {2} out-of-bounds measurements)".format( len(self.imuData)-num_skipped, len(self.imuData), num_skipped ))
+-        self.accelErrors = accelErrors
+\ No newline at end of file
++        self.accelErrors = accelErrors

@@ -1,0 +1,8 @@
+# EXAMPLE ONLY: replace with measurements from your own stationary IMU.
+# Continuous-time noise densities and random walks expected by Kalibr.
+accelerometer_noise_density: 0.005
+accelerometer_random_walk: 0.0005
+gyroscope_noise_density: 0.0005
+gyroscope_random_walk: 0.000002
+rostopic: /mavros/imu/data
+update_rate: 50

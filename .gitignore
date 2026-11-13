@@ -1,0 +1,14 @@
+outputs/
+third_party/
+camera_ws/build/
+camera_ws/devel/
+camera_ws/install/
+camera_ws/logs/
+camera_ws/.catkin_tools/
+camera_ws/src/CMakeLists.txt
+__pycache__/
+*.pyc
+*.bag
+*.bag.active
+*.log
+*.bak
