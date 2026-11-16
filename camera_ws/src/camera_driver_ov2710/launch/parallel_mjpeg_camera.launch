@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="camera_params_file"
+       default="$(find camera_driver_ov2710)/config/camera_ov2710_1920x1080.yaml"
+       doc="UVC camera capture configuration" />
+
+  <rosparam command="load" file="$(arg camera_params_file)" />
+
+  <group ns="camera">
+    <!-- Keep this node name compatible with the existing
+         /camera/usb_cam_driver parameter block in camera YAML files. -->
+    <node pkg="camera_driver_ov2710" type="parallel_mjpeg_camera_node"
+          name="usb_cam_driver" output="screen" respawn="false" />
+  </group>
+</launch>

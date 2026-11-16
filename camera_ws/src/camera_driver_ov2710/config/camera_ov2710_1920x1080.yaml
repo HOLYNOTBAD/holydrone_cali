@@ -1,10 +1,10 @@
-# Capture template only. Calibrate every physical camera and lens.
-# Keep resolution and rotation identical during calibration and deployment.
+# 当前 OV2710（用户提供型号）USB 相机的 1920x1080 MJPEG 采集配置。
+# 采集配置不包含内参；旋转、分辨率改变后应重新标定。
 camera:
   usb_cam_driver:
     video_device: "/dev/video0"
-    image_width: 2592
-    image_height: 1944
+    image_width: 1920
+    image_height: 1080
     framerate: 30
     pixel_format: "mjpeg"
     io_method: "mmap"

@@ -1,4 +1,4 @@
 imu_topic: "/mavros/imu/data"
 imu_rate: 50
 measure_rate: 50
-sequence_time: 10800
+sequence_time: 200

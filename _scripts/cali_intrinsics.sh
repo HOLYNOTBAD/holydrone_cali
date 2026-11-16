@@ -1,6 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# 采集或复用相机 rosbag，并调用 Kalibr 标定单目相机内参。
+# 用法：bash _scripts/cali_intrinsics.sh [CALIBRATION_BAG]
 
 set -e
+
+####################### 参数区 #######################
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     echo "Usage: $0 [CALIBRATION_BAG]"
@@ -15,28 +19,25 @@ fi
 SH_DIR=$(cd "$(dirname "$0")" && pwd)
 source "${SH_DIR}/common.sh"
 
-# 公共标定板配置留在 calibration 根目录，内参录包、日志和报告放在专用子目录。
-
 OUTPUT_DIR="${OUTPUT_ROOT}/intrinsics"
-
-CAMERA_PARAMS="$CAMERA_PARAM_FILE"
 TOPIC="$CAM_TOPIC"
 KALIBR="${KALIBR_WS}/devel/lib/kalibr/kalibr_calibrate_cameras"
-# Process every recorded frame. Set KALIBR_BAG_FREQ to override when needed.
 KALIBR_BAG_FREQ="${KALIBR_BAG_FREQ:-0}"
-# Leave initialization to Kalibr unless a focal length in pixels is supplied.
 KALIBR_FOCAL_LENGTH_INIT="${KALIBR_FOCAL_LENGTH_INIT:-}"
+CAMERA_ARGS=()
+[ -z "$CAMERA_PARAM_FILE" ] || CAMERA_ARGS=(camera_params_file:="$CAMERA_PARAM_FILE")
 
-ROSCORE_PID=""
-CAMERA_PID=""
-RECORD_PID=""
+####################### 环境变量区 #######################
+
+# KALIBR_MANUAL_FOCAL_LENGTH_INIT 仅在启动区校验初始焦距后导出。
+
+####################### 通用函数区 #######################
 
 cleanup_processes() {
     [ -n "$RECORD_PID" ] && kill -INT "$RECORD_PID" 2>/dev/null || true
     [ -n "$CAMERA_PID" ] && kill -TERM "$CAMERA_PID" 2>/dev/null || true
     [ -n "$ROSCORE_PID" ] && kill -TERM "$ROSCORE_PID" 2>/dev/null || true
 }
-trap cleanup_processes EXIT
 
 stop_recording() {
     # 录够图像后按 Ctrl-C，只停止 rosbag，然后继续跑 Kalibr。
@@ -44,6 +45,13 @@ stop_recording() {
     echo "Stopping recording..."
     [ -n "$RECORD_PID" ] && kill -INT "$RECORD_PID" 2>/dev/null || true
 }
+
+####################### 启动区 #######################
+
+ROSCORE_PID=""
+CAMERA_PID=""
+RECORD_PID=""
+trap cleanup_processes EXIT
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -53,7 +61,7 @@ if [ "$#" -eq 1 ]; then
         echo "Calibration bag not found: ${BAG_INPUT}" >&2
         exit 1
     fi
-    # Kalibr runs after cd'ing into OUTPUT_DIR, so keep the bag path absolute.
+    # Kalibr 会在输出目录中运行，因此保留输入 bag 的绝对路径。
     BAG=$(realpath "$BAG_INPUT")
     echo "Using specified intrinsics bag: ${BAG}"
 else
@@ -85,9 +93,8 @@ else
         sleep 2
     fi
 
-    # 加载 IMX577-1 30-degree 参数并启动并行 C++ MJPEG 驱动。
-    roslaunch camera_driver parallel_mjpeg_camera.launch \
-        camera_params_file:="$CAMERA_PARAMS" \
+    # 由驱动包的 launch 加载该相机的配置。
+    roslaunch "$CAMERA_PACKAGE" "$CAMERA_LAUNCH" "${CAMERA_ARGS[@]}" \
         >"${OUTPUT_DIR}/usb_cam.log" 2>&1 &
     CAMERA_PID=$!
     sleep 2
@@ -99,7 +106,7 @@ else
         [ -n "$CAMERA_PID" ] && kill "$CAMERA_PID" 2>/dev/null || true
         exit 1
     fi
-    echo "IMX577-1 30-degree is publishing calibration frames."
+    echo "${CAMERA_PACKAGE} is publishing calibration frames."
 
     # 清除 rqt_image_view 保存的显示旋转，确保窗口忠实显示 image_raw。
     rosrun rqt_image_view rqt_image_view --clear-config "$TOPIC" &

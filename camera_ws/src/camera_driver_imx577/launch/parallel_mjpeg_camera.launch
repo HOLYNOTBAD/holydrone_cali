@@ -1,14 +1,15 @@
 <?xml version="1.0"?>
 <launch>
   <arg name="camera_params_file"
-       doc="Absolute path to configs/camera.yaml" />
+       default="$(find camera_driver_imx577)/config/camera_imx577_2592x1944.yaml"
+       doc="IMX577 camera capture configuration" />
 
   <rosparam command="load" file="$(arg camera_params_file)" />
 
   <group ns="camera">
     <!-- Keep this node name compatible with the existing
          /camera/usb_cam_driver parameter block in camera YAML files. -->
-    <node pkg="camera_driver" type="parallel_mjpeg_camera_node"
+    <node pkg="camera_driver_imx577" type="parallel_mjpeg_camera_node"
           name="usb_cam_driver" output="screen" respawn="false" />
   </group>
 </launch>

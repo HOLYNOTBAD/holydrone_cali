@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(camera_driver)
+project(camera_driver_imx577)
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 set(CMAKE_CXX_STANDARD 14)
@@ -36,6 +36,6 @@ install(TARGETS parallel_mjpeg_camera_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-install(DIRECTORY launch/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
+install(DIRECTORY launch config
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )

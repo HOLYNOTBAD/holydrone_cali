@@ -1,28 +1,17 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# 采集或复用静置 IMU rosbag，校验数据并计算 Allan 方差噪声参数。
+# 用法：bash _scripts/cali_imu.sh [STATIONARY_IMU_BAG]
 
 set -e
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    echo "Usage: $0 [STATIONARY_IMU_BAG]"
-    exit 0
-fi
-[ "$#" -le 1 ] || { echo "Usage: $0 [STATIONARY_IMU_BAG]" >&2; exit 2; }
+####################### 参数区 #######################
 
-# 获取脚本所在目录和工程根目录，使脚本可以从任意工作目录启动。
 SH_DIR=$(cd "$(dirname "$0")" && pwd)
 source "${SH_DIR}/common.sh"
-
-# 公共配置保留在 calibration 根目录，采集数据和 Allan 报告放在专用子目录。
 
 OUTPUT_DIR="${OUTPUT_ROOT}/imu"
 IMU_CONFIG="${OUTPUT_DIR}/imu_mavros.yaml"
 ALLAN_CONFIG="${ALLAN_CONFIG:-${CALIB_DIR}/imu_allan.yaml}"
-
-
-# allan_variance_ros 使用独立 catkin 工作空间，避免污染主工程依赖。
-
-
-# 官方建议静置采集至少 3 小时；进度条宽度为 40 个字符。
 IMU_CALIBRATION_DURATION="${IMU_CALIBRATION_DURATION:-10800}"
 if ! [[ "$IMU_CALIBRATION_DURATION" =~ ^[1-9][0-9]*$ ]]; then
     echo "IMU_CALIBRATION_DURATION must be a positive integer (seconds)." >&2
@@ -30,16 +19,17 @@ if ! [[ "$IMU_CALIBRATION_DURATION" =~ ^[1-9][0-9]*$ ]]; then
 fi
 PROGRESS_BAR_WIDTH=40
 
-RECORD_PID=""
-ROSCORE_PID=""
-MAVROS_PID=""
+####################### 环境变量区 #######################
+
+# 本脚本不额外导出环境变量；Allan 绘图时仅对单条命令设置 MPLBACKEND。
+
+####################### 通用函数区 #######################
 
 cleanup_processes() {
     [ -n "$RECORD_PID" ] && kill -INT "$RECORD_PID" 2>/dev/null || true
     [ -n "$MAVROS_PID" ] && kill -TERM "$MAVROS_PID" 2>/dev/null || true
     [ -n "$ROSCORE_PID" ] && kill -TERM "$ROSCORE_PID" 2>/dev/null || true
 }
-trap cleanup_processes EXIT
 
 stop_recording() {
     # Ctrl-C 只通知 rosbag 正常结束，以便它完成索引并生成可读取的 bag。
@@ -102,139 +92,16 @@ show_recording_progress() {
 validate_imu_bag() {
     # 在 Allan 分析前遍历整包，避免用缺数据、错误话题或运动中的数据生成参数。
     local bag_path=$1
-
-    python3 - "$bag_path" "$IMU_TOPIC" "$IMU_CALIBRATION_DURATION" "$ALLAN_CONFIG" <<'PY'
-import math
-import statistics
-import sys
-
-import rosbag
-import yaml
-
-bag_path, topic, expected_duration, config_path = sys.argv[1:]
-expected_duration = float(expected_duration)
-with open(config_path, "r") as stream:
-    configured_rate = float(yaml.safe_load(stream)["imu_rate"])
-
-count = 0
-zero_stamps = 0
-repeated_stamps = 0
-backward_stamps = 0
-invalid_values = 0
-previous_stamp = None
-first_stamp = None
-last_stamp = None
-intervals = []
-gyro_norm_squared_sum = 0.0
-accel_norm_sum = 0.0
-accel_norm_squared_sum = 0.0
-message_type = None
-
-try:
-    with rosbag.Bag(bag_path) as bag:
-        info = bag.get_type_and_topic_info().topics.get(topic)
-        if info is None:
-            available = ", ".join(sorted(bag.get_type_and_topic_info().topics)) or "<none>"
-            raise RuntimeError(f"required topic {topic} not found; available topics: {available}")
-        message_type = info.msg_type
-        if message_type != "sensor_msgs/Imu":
-            raise RuntimeError(f"{topic} has type {message_type}, expected sensor_msgs/Imu")
-
-        for _, msg, _ in bag.read_messages(topics=[topic]):
-            stamp = msg.header.stamp.to_sec()
-            values = (
-                msg.linear_acceleration.x, msg.linear_acceleration.y,
-                msg.linear_acceleration.z, msg.angular_velocity.x,
-                msg.angular_velocity.y, msg.angular_velocity.z,
-            )
-            if not all(math.isfinite(value) for value in values):
-                invalid_values += 1
-
-            if stamp <= 0.0:
-                zero_stamps += 1
-            elif previous_stamp is not None:
-                delta = stamp - previous_stamp
-                if delta == 0.0:
-                    repeated_stamps += 1
-                elif delta < 0.0:
-                    backward_stamps += 1
-                else:
-                    intervals.append(delta)
-            if stamp > 0.0:
-                first_stamp = stamp if first_stamp is None else min(first_stamp, stamp)
-                last_stamp = stamp if last_stamp is None else max(last_stamp, stamp)
-                previous_stamp = stamp
-
-            ax, ay, az, gx, gy, gz = values
-            accel_norm = math.sqrt(ax * ax + ay * ay + az * az)
-            gyro_norm_squared_sum += gx * gx + gy * gy + gz * gz
-            accel_norm_sum += accel_norm
-            accel_norm_squared_sum += accel_norm * accel_norm
-            count += 1
-except (rosbag.bag.ROSBagException, OSError) as error:
-    raise RuntimeError(f"cannot read rosbag: {error}")
-
-if count == 0:
-    raise RuntimeError(f"no messages found on {topic}")
-if first_stamp is None or last_stamp is None or not intervals:
-    raise RuntimeError("IMU messages do not contain usable header timestamps")
-
-duration = last_stamp - first_stamp
-median_interval = statistics.median(intervals)
-measured_rate = 1.0 / median_interval
-large_gap_limit = 5.0 / measured_rate
-large_gaps = sum(interval > large_gap_limit for interval in intervals)
-gyro_rms = math.sqrt(gyro_norm_squared_sum / count)
-accel_mean = accel_norm_sum / count
-accel_variance = max(0.0, accel_norm_squared_sum / count - accel_mean * accel_mean)
-accel_std = math.sqrt(accel_variance)
-
-errors = []
-warnings = []
-if duration < expected_duration * 0.99:
-    errors.append(f"duration {duration / 3600.0:.2f} h is shorter than the required 3 h")
-if zero_stamps:
-    errors.append(f"{zero_stamps} messages have a zero header timestamp")
-if invalid_values:
-    errors.append(f"{invalid_values} messages contain NaN or Inf")
-if repeated_stamps > max(10, count * 0.001):
-    errors.append(f"too many repeated timestamps: {repeated_stamps}")
-if abs(measured_rate - configured_rate) / configured_rate > 0.10:
-    errors.append(
-        f"measured rate {measured_rate:.2f} Hz differs from imu_allan.yaml "
-        f"({configured_rate:.2f} Hz) by more than 10%")
-if large_gaps > max(10, count * 0.001):
-    errors.append(f"too many timestamp gaps larger than 5 periods: {large_gaps}")
-if not 7.0 <= accel_mean <= 12.5:
-    errors.append(f"mean acceleration norm {accel_mean:.3f} m/s^2 is implausible for a stationary IMU")
-if accel_std > 0.20:
-    errors.append(f"acceleration norm stddev {accel_std:.3f} m/s^2 suggests movement or vibration")
-if gyro_rms > 0.05:
-    errors.append(f"gyroscope RMS {gyro_rms:.4f} rad/s suggests the IMU was moving")
-if backward_stamps:
-    warnings.append(
-        f"{backward_stamps} timestamps are out of recording order; cookbag.py will reorder them")
-
-print("\nIMU bag validation")
-print(f"  file:              {bag_path}")
-print(f"  topic/type:        {topic} ({message_type})")
-print(f"  messages:          {count}")
-print(f"  duration:          {duration / 3600.0:.3f} h")
-print(f"  measured rate:     {measured_rate:.3f} Hz")
-print(f"  zero/repeated ts:  {zero_stamps}/{repeated_stamps}")
-print(f"  backward/large gap:{backward_stamps}/{large_gaps}")
-print(f"  accel norm mean:   {accel_mean:.4f} m/s^2")
-print(f"  accel norm stddev: {accel_std:.4f} m/s^2")
-print(f"  gyro RMS:          {gyro_rms:.6f} rad/s")
-for warning in warnings:
-    print(f"  WARNING: {warning}")
-if errors:
-    for error in errors:
-        print(f"  ERROR: {error}", file=sys.stderr)
-    raise SystemExit("IMU bag validation failed; Allan analysis was not started.")
-print("  result:            PASS\n")
-PY
+    python3 "${ROOT_DIR}/scripts/validate_imu_bag.py" \
+        "$bag_path" "$IMU_TOPIC" "$IMU_CALIBRATION_DURATION" "$ALLAN_CONFIG"
 }
+
+####################### 启动区 #######################
+
+RECORD_PID=""
+ROSCORE_PID=""
+MAVROS_PID=""
+trap cleanup_processes EXIT
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -258,14 +125,13 @@ elif [ "${USE_EXISTING_BAG:-}" = "y" ]; then
     fi
     echo "Using existing IMU noise bag: ${IMU_BAG}"
 else
-    # 新录制时加载主工程 ROS 环境，以便使用 MAVROS 和相关消息定义。
+    # 新录制时加载 ROS 环境，以便使用 MAVROS 和相关消息定义。
     source "$ROS_SETUP"
-     # MAVROS is supplied by the ROS installation.
 
     # 当前没有 ROS master 时临时启动一个。
     if ! rosparam list >/dev/null 2>&1; then
         roscore >"${OUTPUT_DIR}/roscore.log" 2>&1 &
-    ROSCORE_PID=$!
+        ROSCORE_PID=$!
         sleep 2
     fi
 
@@ -296,7 +162,6 @@ fi
 
 # 无论使用新包还是已有包，后续都进入 Allan 分析阶段。
 source "$ROS_SETUP"
- # MAVROS is supplied by the ROS installation.
 
 # 校验失败会立即退出，不会重排 bag，也不会覆盖 imu_mavros.yaml。
 validate_imu_bag "$IMU_BAG"

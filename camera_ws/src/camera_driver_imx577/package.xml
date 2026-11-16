@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>camera_driver</name>
+  <name>camera_driver_imx577</name>
   <version>0.1.0</version>
   <description>Low-latency parallel MJPEG V4L2 camera driver for ROS 1.</description>
 
